@@ -12,22 +12,17 @@ const unsigned long MINUTE = 60*SECOND;
 const long getStatsIntervall = 5*SECOND;
 long getStatsWaitTime = 0;
 
-const unsigned long relayImpulseTime = 5 * SECOND;
-const unsigned long  relayImpulseDebounce = 2 * MINUTE;
+const unsigned long relayImpulseTime = 5 * SECOND; // How long will relay be on
+const unsigned long  relayImpulseDebounce = 2 * MINUTE; // How long to ignore new impulse
 long relayImpulseWaitTime = 0;
 long relayOffAt = 0;
 boolean relayImpulse = false;
 
-String netTime;
-String SignalQuality = "bad";
-String balance = "Hoden";
-String smsCMD;
+String netTime, SignalQuality, balance, smsCMD;
 
 const byte numChars = 64;
 char receivedChars[numChars];
-char nl = '\n';
 boolean newData = false;
-
 
 //Create software serial object to communicate with SIM800L
 SoftwareSerial GSM(TX_PIN, RX_PIN); //SIM800L Tx & Rx is connected to Arduino #3 & #2
@@ -116,10 +111,11 @@ void showNewData() {
     if (result > 0) {
       smsCMD = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
       smsCMD += "\n";
-      Serial.println(smsCMD);
+      //Serial.println(smsCMD);
       if ((digitalRead(RELAY) == LOW) && (millis() - relayImpulseWaitTime) >= relayImpulseDebounce) {
         relayImpulse = true;
         relayImpulseWaitTime = millis();
+        Serial.println(smsCMD);
       }
     } 
 
@@ -182,7 +178,6 @@ void sendSMS(String message, String mobile) {
   delay(500);
 #endif // SIMULATE_BY_SERIAL
 }
-
 
 void recvWithEndMarker() {
     static byte ndx = 0;
