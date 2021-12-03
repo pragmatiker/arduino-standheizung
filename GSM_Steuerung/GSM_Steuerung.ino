@@ -2,14 +2,22 @@
 #include <Regexp.h>
 #define RX_PIN 11
 #define TX_PIN 10
-#define FLAMME_AN 2
-#define FLAMME_AUS 3
+#define RELAY 2
+#define MOBILENR "+491713262788"
 //#define SIMULATE_BY_SERIAL
 
 const unsigned long SECOND = 1000;
 const unsigned long MINUTE = 60*SECOND;
+
 const long getStatsIntervall = 5*SECOND;
-long getStatswaitTime = 0;
+long getStatsWaitTime = 0;
+
+const unsigned long relayImpulseTime = 5 * SECOND;
+const unsigned long  relayImpulseDebounce = 2 * MINUTE;
+long relayImpulseWaitTime = 0;
+long relayOffAt = 0;
+boolean relayImpulse = false;
+
 String netTime;
 String SignalQuality = "bad";
 String balance = "Hoden";
@@ -26,11 +34,8 @@ SoftwareSerial GSM(TX_PIN, RX_PIN); //SIM800L Tx & Rx is connected to Arduino #3
 
 void setup()
 {
-  pinMode(FLAMME_AN, OUTPUT);
-  pinMode(FLAMME_AUS, OUTPUT);
-  digitalWrite(FLAMME_AN, 1);
-  digitalWrite(FLAMME_AUS, 1);
-  
+  pinMode(RELAY, OUTPUT);
+   
   //Begin serial communication with Arduino and Arduino IDE (Serial Monitor)
   Serial.begin(9600);
   
@@ -44,15 +49,15 @@ void setup()
   // Do soft restart
   GSM.print(F("AT+CFUN=1,1\r\n "));
   delay(2000);
-    
+
    // Subscribe to network registration updates
   GSM.print(F("AT+CREG=1\r\n "));
   delay(500);
-  
+
   // Dont store received SMS
   GSM.print(F("AT+CNMI=2,2,0,0,0\r\n "));
   delay(500);
-
+  
   // Set text mode
   GSM.print(F("AT+CMGF=1\r\n "));
   delay(500);
@@ -60,19 +65,17 @@ void setup()
   // Get Network time
   GSM.print(F("AT+CCLK?\r\n "));
   delay(500);
-  
-  digitalWrite(FLAMME_AN, 0);
-  digitalWrite(FLAMME_AUS, 0);
 }
 
 void loop()
 {
-  if ((millis() - getStatswaitTime) > getStatsIntervall) {
+  if ((millis() - getStatsWaitTime) > getStatsIntervall) {
     getStats();
-    getStatswaitTime = millis();
+    getStatsWaitTime = millis();
   }
   recvWithEndMarker();
   showNewData();
+  pulseRelay();
 }
 
 //+CUSD: 0, "Kontostand: 0,57 EUR
@@ -91,46 +94,46 @@ void showNewData() {
     result = ms.Match ("^+CCLK:.*$");
     if (result > 0) {
       netTime = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
-      Serial.println(netTime);
+      netTime += "\n";
+      //Serial.println(netTime);
     } 
     
     result = ms.Match ("Kontostand:%s%d+,%d%d%sEUR$");
     if (result > 0) {
       balance = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
-      Serial.println(balance);
+      balance += "\n";
+      //Serial.println(balance);
     } 
     
     result = ms.Match ("^.CSQ:%s%d%d,%d%s$");
     if (result > 0) {
       SignalQuality = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
-      Serial.println(SignalQuality);
+      SignalQuality += "\n";
+      //Serial.println(SignalQuality);
     }
  
     result = ms.Match ("^FLAMME_AN");
     if (result > 0) {
       smsCMD = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
+      smsCMD += "\n";
       Serial.println(smsCMD);
-      digitalWrite(FLAMME_AN, HIGH);
-      digitalWrite(FLAMME_AUS, LOW);
+      if ((digitalRead(RELAY) == LOW) && (millis() - relayImpulseWaitTime) >= relayImpulseDebounce) {
+        relayImpulse = true;
+        relayImpulseWaitTime = millis();
+      }
     } 
-    
-    result = ms.Match ("^FLAMME_AUS");
-    if (result > 0) {
-      smsCMD = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
-      Serial.println(smsCMD);
-      digitalWrite(FLAMME_AN, LOW);
-      digitalWrite(FLAMME_AUS, HIGH);
-    }
 
     result = ms.Match ("^SEND_STATS");
     if (result > 0) {
       smsCMD = String(receivedChars).substring(ms.MatchStart,ms.MatchStart+ms.MatchLength);
-      Serial.println(SignalQuality);
+      smsCMD += "\n";
+      Serial.println(smsCMD);
       char str[150];
-      strcpy(str, netTime.c_str());
+      strcpy(str, smsCMD.c_str());
+      strcat(str, netTime.c_str());
       strcat(str, balance.c_str());
       strcat(str, SignalQuality.c_str());
-      sendSMS(str,"+491713262788");
+      sendSMS(str, MOBILENR);
     }
        
     newData = false;
@@ -143,6 +146,26 @@ void getStats() {
   GSM.print(F("AT+CSQ\r\n ")); // Get the Signal quality
 }
 
+void pulseRelay() {
+  if ((digitalRead(RELAY) == LOW) && relayImpulse == true) {
+    digitalWrite(RELAY, HIGH);
+    relayOffAt = millis() + relayImpulseTime;    
+    relayImpulse = false;
+    char str[150];
+    strcpy(str, smsCMD.c_str());
+    strcat(str, netTime.c_str());
+    strcat(str, balance.c_str());
+    strcat(str, SignalQuality.c_str());
+    sendSMS(str, MOBILENR);
+  }
+  
+  if (digitalRead(RELAY) == HIGH) {
+    if (millis() >= relayOffAt) {
+      digitalWrite(RELAY, LOW);
+    }
+  } 
+}
+
 void sendSMS(String message, String mobile) {
 #ifdef SIMULATE_BY_SERIAL
   Serial.println("AT+CMGS=\"" + mobile + "\"\r"); //Mobile phone number to send message
@@ -150,13 +173,13 @@ void sendSMS(String message, String mobile) {
   Serial.println((char)26);                       // ASCII code of CTRL+Z to finalized the sending of sms
 #else // actual
   GSM.println("AT+CMGF=1");                    //Sets the GSM Module in Text Mode
-  delay(1000);
+  delay(500);
   GSM.println("AT+CMGS=\"" + mobile + "\"\r"); //Mobile phone number to send message
-  delay(1000);
+  delay(500);
   GSM.println(message);                        // This is the message to be sent.
-  delay(1000);
+  delay(500);
   GSM.println((char)26);                       // ASCII code of CTRL+Z to finalized the sending of sms
-  delay(1000);
+  delay(500);
 #endif // SIMULATE_BY_SERIAL
 }
 
